@@ -13,6 +13,7 @@
 #include "to_string_utils.h"
 #include "utils.hpp"
 #include "runtime/ocl/ocl_event.hpp"
+#include "runtime/ocl/ocl_stream.hpp"
 
 #include "intel_gpu/primitives/reorder.hpp"
 
@@ -22,6 +23,7 @@
 #include <utility>
 
 #include <oneapi/dnnl/dnnl.hpp>
+#include <oneapi/dnnl/dnnl_ocl.hpp>
 
 namespace cldnn {
 namespace onednn {
@@ -525,7 +527,7 @@ protected:
         _args[instance.get_network().get_id()] = get_arguments(instance, args);
     }
 
-    event::ptr execute_impl(const std::vector<event::ptr>& /* events */,
+    event::ptr execute_impl(const std::vector<event::ptr>& events,
                             typed_primitive_inst<PType>& instance) override {
         auto& network = instance.get_network();
         auto& stream = network.get_stream();
@@ -540,9 +542,23 @@ protected:
             }
         }
 
+        bool is_output = instance.needs_completion_event();
+        auto& ocl_stream = downcast<ocl::ocl_stream>(stream);
         if (!instance.can_be_optimized()) {
             try {
-                _prim.execute(stream.get_onednn_stream(), _args[net_id]);
+                if (stream.get_queue_type() == QueueTypes::in_order) {
+                    _prim.execute(stream.get_onednn_stream(), _args[net_id]);
+                } else {
+                    if (ocl_stream.get_sync_method() == SyncMethods::barriers) {
+                        ocl_stream.sync_events(events, false);
+                        auto cl_event = dnnl::ocl_interop::execute(_prim, stream.get_onednn_stream(), _args[net_id], {});
+                        ocl_stream._parallel_kernels++;
+                        GPU_DEBUG_TRACE_DETAIL << "Enqueu oneDNN using barriers\n";
+                        return ocl_stream.create_ocl_event(cl::Event(cl_event));
+                    } else {
+                        OPENVINO_THROW("[GPU] Unexpected sync method for oneDNN primitives");
+                    }
+                }
             } catch (dnnl::error& err) {
                 auto err_code = err.status == dnnl_status_t::dnnl_out_of_memory ? CL_OUT_OF_RESOURCES : CL_INVALID_OPERATION;
                 ocl::rethrow_or_exit(err.what(), err_code, _engine->get_device_info());
@@ -557,6 +573,8 @@ protected:
                 if (duration.empty()) {
                     event = std::make_shared<ocl::ocl_event>(0);
                 } else {
+					if (duration.empty())
+					    duration.push_back(0);
                     OPENVINO_ASSERT(duration.size() == 1, "[GPU] oneDNN profiling data is expected to have info only for single primitive ",
                                                       "actual number is ", duration.size());
                     event = std::make_shared<ocl::ocl_event>(duration[0]);
@@ -566,9 +584,11 @@ protected:
                 // If oneDNN primitive is the output primitive or it's user is CPU implementation, then enqueue marker
                 // with empty events wait list (which will trigger wait for all previously enqueued tasks) and
                 // return it as oneDNN primitive's event as it is a single option for proper synchronization
-                if (instance.needs_completion_event())
+                if (is_output)
                     event = stream.enqueue_marker({});
             }
+        } else {
+            return aggregate_events(events, stream, false, instance.is_output());
         }
 
         return event;
@@ -578,6 +598,17 @@ protected:
         if (_scratchpad_md.get_size() == 0)
             return {};
         return {{{1, 1, 1, (tensor::value_type)(_scratchpad_md.get_size())}, cldnn::data_types::u8, format::bfyx}};
+    }
+
+    event::ptr aggregate_events(const std::vector<event::ptr>& events, stream& stream, bool group = false, bool is_output = false) const {
+        if (events.size() == 1 && !is_output)
+            return events[0];
+
+        if (group && !is_output)
+            return stream.group_events(events);
+
+        return events.empty() ? stream.create_user_event(true)
+                              : stream.enqueue_marker(events, is_output);
     }
 };
 
