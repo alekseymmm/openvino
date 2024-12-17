@@ -242,12 +242,13 @@ void ExecutionConfig::apply_user_properties(const cldnn::device_info& info) {
     if (!is_set_by_user(ov::intel_gpu::enable_lp_transformations)) {
         set_property(ov::intel_gpu::enable_lp_transformations(info.supports_imad || info.supports_immad));
     }
-    if (info.supports_immad) {
-        set_property(ov::intel_gpu::use_onednn(true));
-    }
-    if (get_property(ov::intel_gpu::use_onednn)) {
-        set_property(ov::intel_gpu::queue_type(QueueTypes::in_order));
-    }
+    // if (info.supports_immad) {
+    //     set_property(ov::intel_gpu::use_onednn(true));
+    // }
+    // AM: not sure what should it be for onednn
+    // if (get_property(ov::intel_gpu::use_onednn)) {
+    //     set_property(ov::intel_gpu::queue_type(QueueTypes::in_order));
+    // }
 
     // Enable KV-cache compression by default for non-systolic platforms
     if (!is_set_by_user(ov::hint::kv_cache_precision) && !info.supports_immad) {

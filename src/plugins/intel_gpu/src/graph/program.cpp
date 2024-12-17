@@ -1638,16 +1638,16 @@ void program::set_layout_optimizer_attributes(layout_optimizer& lo) {
     bool enable_onednn_for_tests = get_config().get_property(ov::intel_gpu::optimize_data) || is_internal_program();
     auto& engine = get_engine();
     if (engine.get_device_info().vendor_id == INTEL_VENDOR_ID &&
-        get_config().get_property(ov::intel_gpu::queue_type) == QueueTypes::in_order &&
+        // get_config().get_property(ov::intel_gpu::queue_type) == QueueTypes::in_order &&
         enable_onednn_for_tests) {
-            if (engine.get_device_info().supports_immad) {
-                lo.add_all_onednn_impls_optimization_attribute();
-            } else {
-                if (get_config().get_property(ov::intel_gpu::use_onednn)) {
-                    lo.enable_onednn_for<lstm_seq>();
-                }
+        if (engine.get_device_info().supports_immad) {
+            lo.add_all_onednn_impls_optimization_attribute();
+        } else {
+            if (get_config().get_property(ov::intel_gpu::use_onednn)) {
+                lo.enable_onednn_for<lstm_seq>();
             }
         }
+    }
 #endif
 }
 
